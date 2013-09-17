@@ -1,17 +1,24 @@
 using System;
+using System.Text;
 using Sabertooth.Lexicon;
 
 namespace Sabertooth {
 	class Core {
 		public static int Main (string[] args) {
 			Console.WriteLine ("Welcome to Project Sabertooth.");
+			Server SRV = new Server ();
+			SRV.Start ();
 
-			HTTPResponse testResponse = new HTTPResponse(HTTPResponse.Code.N200, MIME.Plaintext);
-			testResponse.AddInstruction (HTTPResponse.Instruction.SetCookie (new Statement("L1","DDDFFF"), ".snsys.us"));
-			testResponse.AddInstruction (HTTPResponse.Instruction.SetCookie (new Statement("L2c", "DFHFVSD"), ".snsys.us", "/subdir"));
-			Console.WriteLine (testResponse);
-
-			return 0;
+			while(true) {
+				string command = Console.ReadLine ();
+				switch(command) {
+				case "quit":
+					SRV.Stop ();
+					return 0;
+				default:
+					break;
+				}
+			}
 		}
 	}
 }

@@ -5,7 +5,7 @@ using System.Text;
 using Sabertooth.Lexicon;
 
 namespace Sabertooth {
-	public abstract class Header : IStreamable{
+	public abstract class HTTPObject : IStreamable{
 		public const string Newline = "\r\n";
 		public class Instruction : ITextable {
 			public readonly string Key;
@@ -22,10 +22,11 @@ namespace Sabertooth {
 				return String.Format ("{0}: {1}{2}", Key, Value.GetText(), optionsText);
 			}
 			public static Instruction ConnectionClose = new Instruction ("Connection", new GenericTextable("close"));
-			public static Instruction ContentLength(int length) {
+			public static Instruction ConnectionKeepAlive = new Instruction ("Connection", new GenericTextable("keep-alive"));
+			internal static Instruction ContentLength(int length) {
 				return new Instruction ("Content-Length", new GenericTextable (length));
 			}
-			public static Instruction ContentType(MIME type) {
+			internal static Instruction ContentType(MIME type) {
 				return new Instruction ("Content-Type", type);
 			}
 		}
@@ -42,14 +43,14 @@ namespace Sabertooth {
 			internal static readonly Body Empty = new Body (new TextStreamable(String.Empty), MIME.Plaintext);
 		}
 		protected List<Instruction> httpInstructions = new List<Instruction> ();
-		public Header() {
+		public HTTPObject() {
 
 		}
 
 		public abstract byte[] GetBytes ();
 	}
 
-	public class Response : Header, IStreamable {
+	public class Response : HTTPObject, IStreamable {
 		public struct Code : ITextable{
 			public readonly int Number; public readonly string Description;
 			public Code(int num, string desc) {
@@ -60,6 +61,7 @@ namespace Sabertooth {
 			}
 			public static readonly Code N100 = new Code(100, "Continue");
 			public static readonly Code N200 = new Code(200, "OK");
+			public static readonly Code N400 = new Code(400, "Bad Request");
 			public static readonly Code N403 = new Code(403, "Forbidden");
 			public static readonly Code N404 = new Code(404, "Not Found");
 			public static readonly Code N501 = new Code(501, "Not Implemented");
@@ -103,6 +105,18 @@ namespace Sabertooth {
 				return responseBytes;
 			} else {
 				return headerBytes;
+			}
+		}
+		public static Response Standard100 { get{
+				Response R = new Response (Code.N100);
+				R.AddInstruction (Instruction.ConnectionKeepAlive);
+				return R;
+			}
+		}
+		public static Response Standard400 { get{
+				Response R = new Response (Code.N400);
+				R.AddInstruction (Instruction.ConnectionClose);
+				return R;
 			}
 		}
 	}
