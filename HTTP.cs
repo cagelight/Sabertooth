@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 
 using Sabertooth.Lexicon;
@@ -7,7 +8,7 @@ using Sabertooth.Lexicon;
 namespace Sabertooth {
 	public abstract class HTTPObject : IStreamable{
 		public const string Newline = "\r\n";
-		public class Instruction : ITextable {
+		public class Instruction {
 			public readonly string Key;
 			public ITextable Value;
 			private List<ITextable> Options = new List<ITextable>();
@@ -30,24 +31,14 @@ namespace Sabertooth {
 				return new Instruction ("Content-Type", type);
 			}
 		}
-		protected struct Body : IStreamable {
-			public IStreamable Content;
-			public MIME Format;
-			public Body(IStreamable C, MIME F) {
-				Content = C;
-				Format = F;
-			}
-			public byte[] GetBytes() {
-				return Content.GetBytes ();
-			}
-			internal static readonly Body Empty = new Body (new TextStreamable(String.Empty), MIME.Plaintext);
-		}
 		protected List<Instruction> httpInstructions = new List<Instruction> ();
 		public HTTPObject() {
 
 		}
 
 		public abstract byte[] GetBytes ();
+		public abstract int GetSize ();
+		public abstract void StreamTo (Stream S);
 	}
 
 	public class Response : HTTPObject, IStreamable {
@@ -67,7 +58,7 @@ namespace Sabertooth {
 			public static readonly Code N501 = new Code(501, "Not Implemented");
 		}
 		Code httpCode;
-		Body httpBody = Body.Empty;
+		IStreamableContent httpBody = new GeneratedResource (new byte[]{}, MIME.Plaintext);
 		public Response(Code C) {
 			httpCode = C;
 		}
@@ -76,36 +67,50 @@ namespace Sabertooth {
 			this.httpInstructions.Add (I);
 		}
 
-		public void SetBody(IStreamable B, MIME M) {
-			this.httpBody = new Body (B, M);
+		public void SetBody(byte[] B, MIME M) {
+			this.httpBody = new GeneratedResource (B, M);
+		}
+		public void SetBody(IStreamableContent ICS) {
+			this.httpBody = ICS;
 		}
 
-		public string GetNoContentHeader() {
+		public string GetNoContentHeader(bool tailingNewline = false) {
 			string returnString = httpCode.GetText () + Newline;
 			foreach(Instruction I in httpInstructions) {
 				returnString += I.GetText () + Newline;
 			}
-			return returnString;
+			return tailingNewline ? returnString + Newline : returnString;
+		}
+
+		public string GetFullHeader(bool tailingNewline = false) {
+			string nch = GetNoContentHeader ();
+			int bodySize = httpBody.GetSize();
+			if (bodySize > 0) {
+				nch += Instruction.ContentType (httpBody.GetFormat()).GetText() + Newline;
+				nch += Instruction.ContentLength (bodySize).GetText() + Newline;
+			}
+			return tailingNewline ? nch + Newline : nch;
 		}
 
 		public override byte[] GetBytes() {
-			string responseStr = GetNoContentHeader ();
-			byte[] bodyBytes = httpBody.GetBytes ();
-			int bodySize = bodyBytes.Length;
-			if (bodySize > 0) {
-				responseStr += Instruction.ContentType (httpBody.Format).GetText() + Newline;
-				responseStr += Instruction.ContentLength (bodySize).GetText() + Newline;
-			}
-			responseStr += Newline;
+			string responseStr = GetFullHeader (true);
 			byte[] headerBytes = Encoding.UTF8.GetBytes (responseStr);
-			if(bodySize > 0) {
-				byte[] responseBytes = new byte[headerBytes.Length + bodyBytes.Length];
+			if(httpBody.GetSize() > 0) {
+				byte[] responseBytes = new byte[headerBytes.Length + httpBody.GetSize()];
 				Buffer.BlockCopy (headerBytes, 0, responseBytes, 0, headerBytes.Length);
-				Buffer.BlockCopy (bodyBytes, 0, responseBytes, headerBytes.Length, bodyBytes.Length);
+				Buffer.BlockCopy (httpBody.GetBytes(), 0, responseBytes, headerBytes.Length, httpBody.GetSize());
 				return responseBytes;
 			} else {
 				return headerBytes;
 			}
+		}
+		public override int GetSize() {
+			return Encoding.UTF8.GetBytes (GetFullHeader (true)).Length + httpBody.GetSize ();
+		}
+		public override void StreamTo(Stream S) {
+			MemoryStream MS = new MemoryStream (this.GetBytes ());
+			MS.CopyTo (S);
+			MS.Flush();
 		}
 		public static Response Standard100 { get{
 				Response R = new Response (Code.N100);
@@ -115,9 +120,22 @@ namespace Sabertooth {
 		}
 		public static Response Standard400 { get{
 				Response R = new Response (Code.N400);
-				R.AddInstruction (Instruction.ConnectionClose);
+				R.AddInstruction (Instruction.ConnectionKeepAlive);
 				return R;
 			}
+		}
+		public static Response Standard501 { get{
+				Response R = new Response (Code.N501);
+				R.AddInstruction (Instruction.ConnectionKeepAlive);
+				return R;
+			}
+		}
+	}
+
+	public class HEADResponse : Response, IStreamable {
+		public HEADResponse(Response.Code C) : base(C) {}
+		public override byte[] GetBytes () {
+			return Encoding.UTF8.GetBytes (GetFullHeader (true));
 		}
 	}
 }

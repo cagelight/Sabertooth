@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -10,9 +11,11 @@ namespace Sabertooth {
 		private bool Stopping = false;
 		private TcpListener ClientListener;
 		private Thread ClientProcessor;
+		private BaseMandate Gen;
 
 		public Server() {
 			ClientListener = new TcpListener (IPAddress.Any, 8080);
+			Gen = new Mandate ();
 		}
 		public void Start() {
 			ClientListener.Start ();
@@ -43,7 +46,8 @@ namespace Sabertooth {
 				if (clientInfo == null) {
 					break;
 				}
-				Concierge.SendHTTP (GenerateResponse (clientInfo));
+				Response R = GenerateResponse (clientInfo);
+				Concierge.SendHTTP (R);
 			}
 			Console.WriteLine (String.Format("\n\nConnection from {0} closed.", ((IPEndPoint)Client.Client.RemoteEndPoint).Address));
 			Concierge.Close ();
@@ -51,13 +55,16 @@ namespace Sabertooth {
 		}
 
 		private Response GenerateResponse(ClientRequest CR) {
-			if(CR.Host == null) {
+			if(CR.Host == null)
 				return Response.Standard400;
-			}
-			Response OKResponse = new Response (Response.Code.N200);
-			OKResponse.AddInstruction (HTTPObject.Instruction.ConnectionKeepAlive);
-			OKResponse.SetBody (new TextStreamable (String.Format ("You requested: {0}{1}\nThis request was filled in {2} milliseconds.", CR.Host, CR.Path, CR.RequestTime.Mark.TotalMilliseconds)), MIME.Plaintext);
-			return OKResponse;
+			if (!(CR.Type == "GET" || CR.Type == "POST" || CR.Type == "HEAD"))
+				return Response.Standard501;
+			Response Res = new Response (Response.Code.N200);
+			Res.AddInstruction (HTTPObject.Instruction.ConnectionKeepAlive);
+			Res.SetBody (Gen.GET(CR));
+			if (CR.Type == "HEAD")
+				return (HEADResponse)Res;
+			return Res;
 		}
 	}
 }

@@ -9,21 +9,6 @@ using System.Threading;
 using Sabertooth.Lexicon;
 
 namespace Sabertooth {
-	public class ClientRequest {
-		public string Type;
-		public string Path;
-		public string Host;
-		public IPAddress IP;
-		public readonly TimeTracker RequestTime;
-		public ClientRequest() {
-			RequestTime = new TimeTracker ();
-		}
-		public ClientRequest(string type, string path) {
-			Type = type;
-			Path = path;
-			RequestTime = new TimeTracker ();
-		}
-	}
 	public class ClientTranslator {
 		TcpClient Client;
 		Stream Communications;
@@ -83,7 +68,26 @@ namespace Sabertooth {
 			string[] header = headerList.ToArray ();
 			string[] requestLine = header [0].Split (' ');
 			CR.Type = requestLine[0];
-			CR.Path = requestLine[1];
+
+			Statement[] URLArgs;
+			int argindex = requestLine[1].LastIndexOf ('?');
+			if (argindex == -1 || argindex == requestLine[1].Length-1) {
+				URLArgs = new Statement[] { };
+				CR.Path = requestLine[1];
+			} else {
+				List<Statement> argCollection = new List<Statement>();
+				string[] rawargs = requestLine[1].Substring(argindex+1).Split('&');
+				CR.Path = requestLine[1].Substring(0,argindex);
+				foreach(string S in rawargs) {
+					if (S.Length < 3) {continue;}
+					string[] splitargs = S.Split('=');
+					if (splitargs.Length != 2) {continue;}
+					argCollection.Add(new Statement(splitargs[0], splitargs[1]));
+				}
+				URLArgs = argCollection.ToArray();
+			}
+			CR.Arguments = URLArgs;
+
 			for (int i = 1; i < header.Length; ++i) {
 				string[] lineInstruction = header [i].Split(new string[] {": "}, StringSplitOptions.None);
 				switch (lineInstruction[0]) {
@@ -98,7 +102,7 @@ namespace Sabertooth {
 		}
 
 		public void SendHTTP(HTTPObject H) {
-			CommOut.Write (H.GetBytes());
+			H.StreamTo (Communications);
 		}
 	}
 }
