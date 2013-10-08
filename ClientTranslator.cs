@@ -11,7 +11,7 @@ using Sabertooth.Lexicon;
 namespace Sabertooth {
 	public class ClientTranslator {
 		TcpClient Client;
-		Stream Communications;
+		BufferedStream Communications;
 		BinaryWriter CommOut;
 		public ClientTranslator(TcpClient client) {
 			Client = client;
@@ -88,15 +88,28 @@ namespace Sabertooth {
 			}
 			CR.Arguments = URLArgs;
 
-			for (int i = 1; i < header.Length; ++i) {
-				string[] lineInstruction = header [i].Split(new string[] {": "}, StringSplitOptions.None);
+			int bodylength = 0;
+			MIME bodytype = MIME.OctetStream;
+			foreach (string h in header) {
+				string[] lineInstruction = h.Split(new string[] {": "}, StringSplitOptions.None);
 				switch (lineInstruction[0]) {
-					case "Host":
+				case "Content-Length":
+					bodylength = Convert.ToInt32(lineInstruction[1]);
+					break;
+				case "Content-Type":
+					bodytype = MIME.FromText(lineInstruction[1]);
+					break;
+				case "Host":
 					CR.Host = lineInstruction [1];
 					break;
-					default:
+				default:
 					break;
 				}
+			}
+			if(bodylength > 0) {
+				byte[] body = new byte[bodylength];
+				Communications.Read(body, 0, bodylength);
+				CR.Body = new IStreamableContent[] {new GeneratedResource(body, bodytype)};
 			}
 			return CR;
 		}
