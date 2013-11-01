@@ -55,6 +55,7 @@ namespace Sabertooth {
 			public static readonly Code N400 = new Code(400, "Bad Request");
 			public static readonly Code N403 = new Code(403, "Forbidden");
 			public static readonly Code N404 = new Code(404, "Not Found");
+			public static readonly Code N500 = new Code(500, "Internal Server Error");
 			public static readonly Code N501 = new Code(501, "Not Implemented");
 		}
 		Code httpCode;
@@ -121,6 +122,12 @@ namespace Sabertooth {
 		public static Response Standard400 { get{
 				Response R = new Response (Code.N400);
 				R.AddInstruction (Instruction.ConnectionKeepAlive);
+				return R;
+			}
+		}
+		public static Response Standard500 { get{
+				Response R = new Response (Code.N500);
+				R.AddInstruction (Instruction.ConnectionClose);
 				return R;
 			}
 		}

@@ -1,21 +1,23 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 
 using Sabertooth.Lexicon;
+using Sabertooth.Mandate;
 
 namespace Sabertooth {
 	internal class Server {
 		private bool Stopping = false;
 		private TcpListener ClientListener;
 		private Thread ClientProcessor;
-		private BaseMandate Gen;
+		private MandateManager Gen;
 
 		public Server() {
 			ClientListener = new TcpListener (IPAddress.Any, 8080);
-			Gen = new Mandate ();
+			Gen = new MandateManager();
 		}
 		public void Start() {
 			ClientListener.Start ();
@@ -49,7 +51,7 @@ namespace Sabertooth {
 				Response R = GenerateResponse (clientInfo);
 				Concierge.SendHTTP (R);
 			}
-			Console.WriteLine (String.Format("\n\nConnection from {0} closed.", ((IPEndPoint)Client.Client.RemoteEndPoint).Address));
+			//Console.WriteLine (String.Format("\n\nConnection from {0} closed.", ((IPEndPoint)Client.Client.RemoteEndPoint).Address));
 			Concierge.Close ();
 			Client.Close ();
 		}
@@ -61,10 +63,19 @@ namespace Sabertooth {
 				return Response.Standard501;
 			Response Res = new Response (Response.Code.N200);
 			Res.AddInstruction (HTTPObject.Instruction.ConnectionKeepAlive);
-			Res.SetBody (Gen.GET(CR));
+			try {
+				Res.SetBody (Gen.Get(CR));
+			} catch (Exception e) {
+				Console.WriteLine ("An internal error was encountered in the Mandate assemblies: \n{0}", e);
+				return Response.Standard500;
+			}
 			if (CR.Type == "HEAD")
 				return (HEADResponse)Res;
 			return Res;
+		}
+
+		public static string GetPath(string URLPath) {
+			return Path.Combine (Environment.CurrentDirectory, "Assets", URLPath);
 		}
 	}
 }

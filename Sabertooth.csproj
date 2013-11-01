@@ -39,16 +39,13 @@
     <Compile Include="Server.cs" />
     <Compile Include="ClientTranslator.cs" />
     <Compile Include="HTTP.cs" />
+    <Compile Include="Mandate.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <ItemGroup>
     <ProjectReference Include="..\SabertoothLexicon\SabertoothLexicon.csproj">
       <Project>{63013972-66F6-49B2-82C3-805DE669AC7B}</Project>
       <Name>SabertoothLexicon</Name>
-    </ProjectReference>
-    <ProjectReference Include="..\SabertoothMandate_Test\SabertoothMandate_Test.csproj">
-      <Project>{AD23976E-4E65-429C-808A-E6AA6C14DF71}</Project>
-      <Name>SabertoothMandate_Test</Name>
     </ProjectReference>
   </ItemGroup>
 </Project>
