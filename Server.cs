@@ -20,6 +20,7 @@ namespace Sabertooth {
 			Gen = new MandateManager();
 		}
 		public void Start() {
+			Gen.Begin ();
 			ClientListener.Start ();
 			ClientProcessor = new Thread (ClientGateway);
 			ClientProcessor.Start ();
@@ -27,6 +28,7 @@ namespace Sabertooth {
 		public void Stop()  {
 			Stopping = true;
 			ClientListener.Stop ();
+			Gen.End ();
 		}
 		private void ClientGateway () {
 			while (!Stopping) {

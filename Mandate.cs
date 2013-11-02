@@ -1,9 +1,11 @@
 using System;
 using System.CodeDom.Compiler;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using Microsoft.CSharp;
 
 using Sabertooth.Lexicon;
@@ -12,34 +14,84 @@ using Sabertooth.Lexicon.Attributes;
 namespace Sabertooth.Mandate {
 	public class MandateManager {
 		protected HashSet<Mandate> mandates;
-		protected Dictionary<string, Mandate> subdomainDict;
+		protected ConcurrentDictionary<string, Mandate> subdomainDict;
 		protected Mandate rootMandate;
 		public MandateManager() { 
 			this.RebuildMandates ();
-			this.RebuildReferences ();
+		}
+		protected Thread Watchdog;
+		protected ManualResetEvent Watchgate = new ManualResetEvent(false);
+		protected bool watching = false;
+		protected bool validationflag = false;
+		protected void WatchdogMethod () { 
+			while (watching) {
+				this.Watchgate.WaitOne ();
+				do {
+					this.validationflag = false;
+					this.RebuildReferences();
+				} while (this.validationflag);
+				this.Watchgate.Reset ();
+			}
+		}
+		public void Begin() {
+			if (Watchdog == null) {
+				this.watching = true;
+				Watchgate.Reset ();
+				Watchdog = new Thread (WatchdogMethod);
+				Watchdog.Start ();
+			}
+		}
+		public void End() {
+			if (Watchdog != null) {
+				this.watching = false;
+				Watchgate.Set ();
+				Watchdog.Join ();
+				Watchdog = null;
+			}
 		}
 		public void RebuildMandates() {
+			if (mandates != null) {
+				foreach(Mandate M in mandates) {
+					M.End ();
+				}
+			}
 			mandates = new HashSet<Mandate> ();
 			foreach(string path in Directory.GetFiles(Path.Combine(Environment.CurrentDirectory, "Sites"), "*.cs", SearchOption.TopDirectoryOnly)) {
 				mandates.Add(new Mandate (path));
 			}
+			foreach(Mandate M in mandates) {
+				if(!M.Build ()) {
+					Console.WriteLine ("Mandate \"{0}\" is not valid, and because it was invalid on launch, it has no fallback iterations in memory.", M.Filename);
+				}
+				M.MandateBuildSuccess += OnMandateRebuilt;
+				M.Begin ();
+			}
+			this.RebuildReferences ();
 		}
 		public void RebuildReferences() {
-			subdomainDict = new Dictionary<string, Mandate> ();
+			subdomainDict = new ConcurrentDictionary<string, Mandate> ();
 			rootMandate = null;
-			foreach(Mandate M in mandates) {
+			foreach (Mandate M in mandates) {
 				if (M.ClaimsRoot) {
-					if (rootMandate != null) {Console.WriteLine ("WARNING: MULTIPLE CLAIMS TO ROOT DETECTED!");}
+					if (rootMandate != null) {
+						Console.WriteLine ("WARNING: MULTIPLE CLAIMS TO ROOT DETECTED!");
+					}
 					rootMandate = M;
 				}
-				foreach(string sub in M.Subdomains) {
-					if (subdomainDict.ContainsKey(sub)) {Console.WriteLine ("WANRING: MULTIPLE CLAIMS TO THE SAME SUBDOMAIN DETECTED!");}
+				foreach (string sub in M.Subdomains) {
+					if (subdomainDict.ContainsKey (sub)) {
+						Console.WriteLine ("WANRING: MULTIPLE CLAIMS TO THE SAME SUBDOMAIN DETECTED!");
+					}
 					subdomainDict [sub] = M;
 				}
 			}
 			if (rootMandate == null) {
 				Console.WriteLine ("WARNING: NO MANDATES CLAIMED ROOT!");
 			}
+		}
+		protected void OnMandateRebuilt(Mandate source, List<string> buildLog) {
+			this.validationflag = true;
+			this.Watchgate.Set ();
 		}
 		public IStreamableContent Get(ClientRequest CR) {
 			string[] domsplit = CR.Host.Split (new char[] {'.'}).Reverse().ToArray();
@@ -64,12 +116,47 @@ namespace Sabertooth.Mandate {
 		protected CompilerResults resultsPrevious;
 		public string[] Subdomains { get{return this.subdomainDict.Keys.ToArray ();} }
 		public bool ClaimsRoot { get{return (rootSite != null);} }
+		public string Filename {get {return this.csFile.Name;}}
+		public event MandateBuildSuccessHandler MandateBuildSuccess;
+		public event MandateBuildFailureHandler MandateBuildFailure;
 		public Mandate (string path) {
 			csFile = new FileInfo (path);
-			this.Build ();
-			this.RepopulateDictionary();
+			this.MandateBuildSuccess += OnBuildSuccess;
+			this.MandateBuildFailure += OnBuildFailure;
+		}
+		protected int watchtime = 500;
+		protected bool watching = false;
+		protected AutoResetEvent Watchgate = new AutoResetEvent(false);
+		protected Thread Watchdog;
+		public void Begin() {
+			if (Watchdog == null) {
+				watching = true;
+				Watchdog = new Thread (Watch);
+				Watchdog.Start ();
+			}
+		}
+		protected void Watch () {
+			while (watching) {
+				Watchgate.WaitOne (watchtime);
+				if (watching) {
+					FileInfo check = new FileInfo (csFile.FullName);
+					if (check.LastWriteTime != csFile.LastWriteTime) {
+						csFile = check;
+						this.Build ();
+					}
+				}
+			}
+		}
+		public void End() {
+			if (Watchdog != null) {
+				watching = false;
+				Watchgate.Set ();
+				Watchdog.Join ();
+				Watchdog = null;
+			}
 		}
 		public bool Build() {
+			List<string> buildOut = new List<string> ();
 			try {
 				CompilerParameters compParam = new CompilerParameters ();
 				compParam.GenerateInMemory = true;
@@ -81,10 +168,10 @@ namespace Sabertooth.Mandate {
 				StreamReader csStream = csFile.OpenText ();
 				resultsPrevious = provider.CompileAssemblyFromSource (compParam, csStream.ReadToEnd());
 				csStream.Dispose ();
+				foreach(string o in resultsPrevious.Output) {
+					buildOut.Add(o);
+				}
 				if (resultsPrevious.Errors.HasErrors) {
-					foreach(CompilerError E in resultsPrevious.Errors) {
-						Console.WriteLine(E);
-					}
 					throw new Exception("Compilation of mandate failed.");
 				}
 				Module[] mods = resultsPrevious.CompiledAssembly.GetModules();
@@ -95,6 +182,11 @@ namespace Sabertooth.Mandate {
 				IEnumerable<Type> sites = from site in mod.GetTypes () where site.BaseType == typeof(SiteBase) select site;
 				if (sites.Count() == 0) {
 					throw new Exception("Compiled mandate has no sites.");
+				}
+				foreach(object attr in mod.Assembly.GetCustomAttributes(true)) {
+					if (attr.GetType() == typeof(RefreshTime)) {
+						this.watchtime = ((RefreshTime)attr).msec;
+					}
 				}
 				List<Site> siteList = new List<Site>();
 				foreach(Type site in sites) {
@@ -113,9 +205,11 @@ namespace Sabertooth.Mandate {
 				}
 				this.SITES = siteList.ToArray();
 				this.MODULE = mod;
+				this.RepopulateDictionary();
+				this.MandateBuildSuccess(this, buildOut);
 				return true;
 			} catch (Exception e) {
-				Console.WriteLine (e);
+				this.MandateBuildFailure (this, buildOut, e);
 				return false;
 			}
 		}
@@ -154,6 +248,12 @@ namespace Sabertooth.Mandate {
 				}
 			}
 		}
+		protected virtual void OnBuildSuccess(Mandate source, List<string> buildLog) {
+
+		}
+		protected virtual void OnBuildFailure(Mandate source, List<string> buildLog, Exception e) {
+
+		}
 		public static string LocalAssemblyReference(string dllName) {
 			return Path.Combine (Environment.CurrentDirectory, dllName);
 		}
@@ -175,5 +275,9 @@ namespace Sabertooth.Mandate {
 			return GET.Invoke (instance, new object[] {CR}) as IStreamableContent;
 		}
 	}
+
+	//EVENT
+	public delegate void MandateBuildSuccessHandler(Mandate source, List<string> buildLog);
+	public delegate void MandateBuildFailureHandler(Mandate source, List<string> buildLog, Exception e);
 }
 
