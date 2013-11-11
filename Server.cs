@@ -7,6 +7,7 @@ using System.Threading;
 
 using Sabertooth.Lexicon;
 using Sabertooth.Mandate;
+using Sabertooth.HTTP;
 
 namespace Sabertooth {
 	internal class Server {
@@ -42,9 +43,8 @@ namespace Sabertooth {
 			}
 		}
 		private void ClientConcierge (TcpClient Client) {
-			Console.WriteLine (String.Format("Connection from {0} opened.\n\n", ((IPEndPoint)Client.Client.RemoteEndPoint).Address));
 			ClientTranslator Concierge = new ClientTranslator (Client);
-			Concierge.SendHTTP (Response.Standard100);
+			//Concierge.SendHTTP (Response.Standard100);
 			while(true){
 				ClientRequest clientInfo = Concierge.ProcessRequest ();
 				if (clientInfo == null) {
@@ -53,23 +53,31 @@ namespace Sabertooth {
 				Response R = GenerateResponse (clientInfo);
 				Concierge.SendHTTP (R);
 			}
-			//Console.WriteLine (String.Format("\n\nConnection from {0} closed.", ((IPEndPoint)Client.Client.RemoteEndPoint).Address));
 			Concierge.Close ();
 			Client.Close ();
 		}
 
 		private Response GenerateResponse(ClientRequest CR) {
-			if(CR.Host == null)
-				return Response.Standard400;
-			if (!(CR.Type == "GET" || CR.Type == "POST" || CR.Type == "HEAD"))
-				return Response.Standard501;
-			Response Res = new Response (Response.Code.N200);
-			Res.AddInstruction (HTTPObject.Instruction.ConnectionKeepAlive);
+			if (CR.Host == null) {
+				Response BR = new Response (Response.Code.N400, new TextResource("Sabertooth requires that clients use HTTP 1.1 connections, and thus have Host fields in their headers."));
+				BR.connectionStatus = Instruction.Connection.Close;
+				return BR;
+			}
+			if (!(CR.Type == "GET" || CR.Type == "POST" || CR.Type == "HEAD")) {
+				Response BR = new Response (Response.Code.N400, new TextResource ("Sabertooth only supports GET, POST, and HEAD at the moment."));
+				return BR;
+			}
+			Response Res = new Response (Response.Code.N200, new TextResource("You should not be seeing this."));
 			try {
-				Res.SetBody (Gen.Get(CR));
+				IStreamableContent GenGET = Gen.Get(CR);
+				if (GenGET == null)
+					throw new ArgumentNullException("The mandate failed to generate a page, hopefully an error log appears above.");
+				Res.SetBody (GenGET);
 			} catch (Exception e) {
-				Console.WriteLine ("An internal error was encountered in the Mandate assemblies: \n{0}", e);
-				return Response.Standard500;
+				Console.WriteLine (e);
+				Response ISE = new Response (Response.Code.N500, new TextResource ("If you are reading this text, the Sabertooth mandate responsible for this request has encountered an error. If you are the server administrator, an error log should have appeared in the main Sabertooth console window."));
+				ISE.connectionStatus = Instruction.Connection.Close;
+				return ISE;
 			}
 			if (CR.Type == "HEAD")
 				return (HEADResponse)Res;

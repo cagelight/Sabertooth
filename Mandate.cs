@@ -56,7 +56,7 @@ namespace Sabertooth.Mandate {
 				}
 			}
 			mandates = new HashSet<Mandate> ();
-			foreach(string path in Directory.GetFiles(Path.Combine(Environment.CurrentDirectory, "Sites"), "*.cs", SearchOption.TopDirectoryOnly)) {
+			foreach(string path in Directory.GetFiles(Path.Combine(Environment.CurrentDirectory, "Sites"), "*.sbr", SearchOption.TopDirectoryOnly)) {
 				mandates.Add(new Mandate (path));
 			}
 			foreach(Mandate M in mandates) {
@@ -64,6 +64,7 @@ namespace Sabertooth.Mandate {
 					Console.WriteLine ("Mandate \"{0}\" is not valid, and because it was invalid on launch, it has no fallback iterations in memory.", M.Filename);
 				}
 				M.MandateBuildSuccess += OnMandateRebuilt;
+				M.MandateBuildFailure += OnMandateFailedRebuild;
 				M.Begin ();
 			}
 			this.RebuildReferences ();
@@ -90,39 +91,94 @@ namespace Sabertooth.Mandate {
 			}
 		}
 		protected void OnMandateRebuilt(Mandate source, List<string> buildLog) {
+			Console.WriteLine ("Mandate \"{0}\" successfully rebuilt.", source.Filename);
 			this.validationflag = true;
 			this.Watchgate.Set ();
 		}
+		protected void OnMandateFailedRebuild(Mandate source, List<string> buildLog, Exception e) {
+			Console.WriteLine ("Mandate \"{0}\" failed rebuild or validation:", source.Filename);
+			Console.WriteLine (e);
+			foreach(string line in buildLog) {
+				Console.WriteLine (line);
+			}
+		}
 		public IStreamableContent Get(ClientRequest CR) {
-			string[] domsplit = CR.Host.Split (new char[] {'.'}).Reverse().ToArray();
-			Mandate M;
-			if (domsplit.Length > 2 && subdomainDict.TryGetValue(domsplit[2], out M)) {
-				return M.Get (CR, domsplit [2]);
-			} else {
-				if (rootMandate != null) {
-					return rootMandate.Get (CR, null);
+			try {
+				string[] domsplit = CR.Host.Split (new char[] {'.'}).Reverse().ToArray();
+				Mandate M;
+				if (domsplit.Length > 2 && subdomainDict.TryGetValue(domsplit[2], out M)) {
+					return M.Get (CR, domsplit [2]);
 				} else {
-					throw new Exception ("A request to the root domain was made, but none of your mandates claim root ownership.");
+					if (rootMandate != null) {
+						return rootMandate.Get (CR, null);
+					} else {
+						throw new Exception ("A request to the root domain was made, but none of your mandates claim root ownership.");
+					}
 				}
+			} catch (Exception e) {
+				Console.WriteLine (e);
+				return null;
 			}
 		}
 	}
 	public class Mandate {
 		protected Module MODULE;
-		protected FileInfo csFile;
+		protected FileInfo sbrFile;
+		protected List<string> buildRefs = new List<string>();
+		protected List<FileInfo> csFiles = new List<FileInfo>();
 		protected Site[] SITES = new Site[0];
 		protected Site rootSite;
 		protected Dictionary<string, Site> subdomainDict;
 		protected CompilerResults resultsPrevious;
 		public string[] Subdomains { get{return this.subdomainDict.Keys.ToArray ();} }
 		public bool ClaimsRoot { get{return (rootSite != null);} }
-		public string Filename {get {return this.csFile.Name;}}
+		public string Filename {get {return this.sbrFile.Name;}}
+		public string Name {get{return this.sbrFile.Name.Substring(0, this.sbrFile.Name.Length - 4);}}
 		public event MandateBuildSuccessHandler MandateBuildSuccess;
 		public event MandateBuildFailureHandler MandateBuildFailure;
 		public Mandate (string path) {
-			csFile = new FileInfo (path);
+			sbrFile = new FileInfo (path);
+			this.EvalSbr ();
 			this.MandateBuildSuccess += OnBuildSuccess;
 			this.MandateBuildFailure += OnBuildFailure;
+			this.Build ();
+		}
+		protected enum SbrLineState {NUL, REF, SRC}
+		protected void EvalSbr() {
+			try {
+				buildRefs = new List<string> ();
+				csFiles = new List<FileInfo> ();
+				StreamReader sbr = sbrFile.OpenText ();
+				SbrLineState ls = SbrLineState.NUL;
+				foreach(string line in sbr.ReadToEnd().Split(new char[] {'\n'}).Where(l => l.Length > 0)) {
+					if (line.Length >= 5) {
+						switch (line.Substring (0, 5)) {
+						case "[REF]":
+							ls = SbrLineState.REF;
+							continue;
+						case "[SRC]":
+							ls = SbrLineState.SRC;
+							continue;
+						}
+					}
+					switch(ls) {
+						case SbrLineState.NUL:
+						break;
+						case SbrLineState.REF:
+						this.buildRefs.Add(line);
+						break;
+						case SbrLineState.SRC:
+						if (File.Exists(LocalSiteReference(line))) {
+							this.csFiles.Add (new FileInfo(LocalSiteReference(line)));
+						} else {
+							Console.WriteLine("ERROR: File \"{0}\" does not exist as specified in mandate \"{1}\"", line, this.Filename);
+						}
+						break;
+					}
+				}
+			} catch (Exception e) {
+				Console.WriteLine (e);
+			}
 		}
 		protected int watchtime = 500;
 		protected bool watching = false;
@@ -139,10 +195,18 @@ namespace Sabertooth.Mandate {
 			while (watching) {
 				Watchgate.WaitOne (watchtime);
 				if (watching) {
-					FileInfo check = new FileInfo (csFile.FullName);
-					if (check.LastWriteTime != csFile.LastWriteTime) {
-						csFile = check;
+					FileInfo sbrcheck = new FileInfo (sbrFile.FullName);
+					if (sbrcheck.LastWriteTime != sbrFile.LastWriteTime) {
+						sbrFile.Refresh ();
+						this.EvalSbr ();
 						this.Build ();
+					}
+					foreach(FileInfo cs in csFiles) {
+						FileInfo cscheck = new FileInfo (cs.FullName);
+						if (cscheck.LastWriteTime != cs.LastWriteTime) {
+							cs.Refresh ();
+							this.Build ();
+						}
 					}
 				}
 			}
@@ -165,9 +229,13 @@ namespace Sabertooth.Mandate {
 				compParam.CompilerOptions = "/optimize";
 				compParam.ReferencedAssemblies.AddRange (new string[] {"System.dll", LocalAssemblyReference("Lexicon.dll"), "WebSharp.dll"});
 				CSharpCodeProvider provider = new CSharpCodeProvider ();
-				StreamReader csStream = csFile.OpenText ();
-				resultsPrevious = provider.CompileAssemblyFromSource (compParam, csStream.ReadToEnd());
-				csStream.Dispose ();
+				string code = String.Empty;
+				foreach(FileInfo cs in csFiles) {
+					using (StreamReader csr = cs.OpenText()) {
+						code += csr.ReadToEnd();
+					}
+				}
+				resultsPrevious = provider.CompileAssemblyFromSource (compParam, code);
 				foreach(string o in resultsPrevious.Output) {
 					buildOut.Add(o);
 				}
@@ -237,15 +305,20 @@ namespace Sabertooth.Mandate {
 			return log;
 		}
 		public IStreamableContent Get(ClientRequest CR, string subdomain) {
-			Site g;
-			if (subdomain != null && subdomainDict.TryGetValue(subdomain, out g)) {
-				return g.Get (CR);
-			} else {
-				if (rootSite != null) {
-					return rootSite.Get (CR);
+			try {
+				Site g;
+				if (subdomain != null && subdomainDict.TryGetValue(subdomain, out g)) {
+					return g.Get (CR);
 				} else {
-					throw new Exception ("A request was made to a non-existent root site on this Mandate. This should never happen under any circumstance whatsoever, this message should only ever have been viewed in the source code.");
+					if (rootSite != null) {
+						return rootSite.Get (CR);
+					} else {
+						throw new Exception ("A request was made to a non-existent root site on this Mandate. This should never happen under any circumstance whatsoever, this message should only ever have been viewed in the source code.");
+					}
 				}
+			} catch (Exception e) {
+				Console.WriteLine (e);
+				return null;
 			}
 		}
 		protected virtual void OnBuildSuccess(Mandate source, List<string> buildLog) {
@@ -256,6 +329,9 @@ namespace Sabertooth.Mandate {
 		}
 		public static string LocalAssemblyReference(string dllName) {
 			return Path.Combine (Environment.CurrentDirectory, dllName);
+		}
+		public static string LocalSiteReference(string dllName) {
+			return Path.Combine (Environment.CurrentDirectory, "Sites", dllName);
 		}
 	}
 
