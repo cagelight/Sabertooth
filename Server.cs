@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
@@ -67,12 +68,27 @@ namespace Sabertooth {
 				Response BR = new Response (Response.Code.N400, new TextResource ("Sabertooth only supports GET, POST, and HEAD at the moment."));
 				return BR;
 			}
+			string realm;
+			if (Gen.RequiresAuthorization(CR, out realm)) {
+				Tuple<string, string> auth = CR.Authorization;
+				if (auth == null || !Gen.IsAuthorized(CR, auth)) {
+					EmptyResponse AUTH = new EmptyResponse (Response.Code.N401);
+					AUTH.AddInstruction (Instruction.Authenticate(realm));
+					return AUTH;
+				}
+			}
 			Response Res = new Response (Response.Code.N200, new TextResource("You should not be seeing this."));
 			try {
-				IStreamableContent GenGET = Gen.Get(CR);
-				if (GenGET == null)
+				ClientBody CB = CR.ReadBody();
+				IStreamableContent GenRes;
+				if (CB == null) {
+					GenRes = Gen.Get(CR);
+				} else {
+					GenRes = Gen.Post(CR, CB);
+				}
+				if (GenRes == null)
 					throw new ArgumentNullException("The mandate failed to generate a page, hopefully an error log appears above.");
-				Res.SetBody (GenGET);
+				Res.SetBody (GenRes);
 			} catch (Exception e) {
 				Console.WriteLine (e);
 				Response ISE = new Response (Response.Code.N500, new TextResource ("If you are reading this text, the Sabertooth mandate responsible for this request has encountered an error. If you are the server administrator, an error log should have appeared in the main Sabertooth console window."));
@@ -80,7 +96,7 @@ namespace Sabertooth {
 				return ISE;
 			}
 			if (CR.Type == "HEAD")
-				return (HEADResponse)Res;
+				return (EmptyResponse)Res;
 			return Res;
 		}
 

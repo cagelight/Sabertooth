@@ -12,6 +12,7 @@ using Sabertooth.Lexicon;
 using Sabertooth.Lexicon.Attributes;
 
 namespace Sabertooth.Mandate {
+	internal enum SiteMethod {GET, POST, REQAUTH, ISAUTH}
 	public class MandateManager {
 		protected HashSet<Mandate> mandates;
 		protected ConcurrentDictionary<string, Mandate> subdomainDict;
@@ -102,15 +103,15 @@ namespace Sabertooth.Mandate {
 				Console.WriteLine (line);
 			}
 		}
-		public IStreamableContent Get(ClientRequest CR) {
+		protected Site GetSite(ClientRequest CR) {
 			try {
 				string[] domsplit = CR.Host.Split (new char[] {'.'}).Reverse().ToArray();
 				Mandate M;
 				if (domsplit.Length > 2 && subdomainDict.TryGetValue(domsplit[2], out M)) {
-					return M.Get (CR, domsplit [2]);
+					return M.GetSite (CR, domsplit [2]);
 				} else {
 					if (rootMandate != null) {
-						return rootMandate.Get (CR, null);
+						return rootMandate.GetSite (CR, null);
 					} else {
 						throw new Exception ("A request to the root domain was made, but none of your mandates claim root ownership.");
 					}
@@ -119,6 +120,19 @@ namespace Sabertooth.Mandate {
 				Console.WriteLine (e);
 				return null;
 			}
+		}
+		public IStreamableContent Get(ClientRequest CR) {
+			return this.GetSite (CR).Get (CR);
+		}
+
+		public IStreamableContent Post(ClientRequest CR, ClientBody CB) {
+			return this.GetSite (CR).Post (CR, CB);
+		}
+		public bool RequiresAuthorization(ClientRequest CR, out string realm) {
+			return this.GetSite (CR).RequiresAuthorization (CR, out realm);
+		}
+		public bool IsAuthorized(ClientRequest CR, Tuple<string, string> auth) {
+			return this.GetSite (CR).IsAuthorized (CR, auth);
 		}
 	}
 	public class Mandate {
@@ -304,14 +318,14 @@ namespace Sabertooth.Mandate {
 			}
 			return log;
 		}
-		public IStreamableContent Get(ClientRequest CR, string subdomain) {
+		internal Site GetSite(ClientRequest CR, string subdomain) {
 			try {
 				Site g;
 				if (subdomain != null && subdomainDict.TryGetValue(subdomain, out g)) {
-					return g.Get (CR);
+					return g;
 				} else {
 					if (rootSite != null) {
-						return rootSite.Get (CR);
+						return rootSite;
 					} else {
 						throw new Exception ("A request was made to a non-existent root site on this Mandate. This should never happen under any circumstance whatsoever, this message should only ever have been viewed in the source code.");
 					}
@@ -341,6 +355,9 @@ namespace Sabertooth.Mandate {
 		protected Type modref;
 		protected object instance;
 		protected MethodInfo GET { get{return modref.GetMethod ("Get");} }
+		protected MethodInfo POST { get{return modref.GetMethod ("Post");} }
+		protected MethodInfo REQAUTH { get{return modref.GetMethod ("RequiresAuthorization");} }
+		protected MethodInfo ISAUTH { get{return modref.GetMethod ("IsAuthorized");} }
 		public Site(Type modref, bool root, string[] subdomains) {
 			this.modref = modref;
 			this.root = root;
@@ -349,6 +366,18 @@ namespace Sabertooth.Mandate {
 		}
 		public IStreamableContent Get(ClientRequest CR) {
 			return GET.Invoke (instance, new object[] {CR}) as IStreamableContent;
+		}
+		public IStreamableContent Post(ClientRequest CR, ClientBody CB) {
+			return POST.Invoke (instance, new object[] {CR, CB}) as IStreamableContent;
+		}
+		public bool RequiresAuthorization(ClientRequest CR, out string realm) {
+			object[] param = new object[] { CR, null };
+			bool r = (bool)REQAUTH.Invoke (instance, param);
+			realm = param [1] as string;
+			return r;
+		}
+		public bool IsAuthorized(ClientRequest CR, Tuple<string, string> auth) {
+			return (bool)ISAUTH.Invoke (instance, new object[] {CR, auth});
 		}
 	}
 

@@ -42,6 +42,9 @@ namespace Sabertooth.HTTP {
 		internal static Instruction ContentType(MIME type) {
 			return new Instruction ("Content-Type", type.ToString());
 		}
+		public static Instruction Authenticate(string realm) {
+			return new Instruction ("WWW-Authenticate", String.Format("Basic realm=\"{0}\"", realm));
+		}
 	}
 	public class Response : HTTPObject, IStreamable {
 		public struct Code {
@@ -55,6 +58,7 @@ namespace Sabertooth.HTTP {
 			public static readonly Code N100 = new Code(100, "Continue");
 			public static readonly Code N200 = new Code(200, "OK");
 			public static readonly Code N400 = new Code(400, "Bad Request");
+			public static readonly Code N401 = new Code(401, "Authorization Required");
 			public static readonly Code N403 = new Code(403, "Forbidden");
 			public static readonly Code N404 = new Code(404, "Not Found");
 			public static readonly Code N500 = new Code(500, "Internal Server Error");
@@ -98,9 +102,9 @@ namespace Sabertooth.HTTP {
 			}
 			byte[] headerBytes = Encoding.UTF8.GetBytes (responseStr + Newline);
 			if(bodybytes.Length > 0) {
-				byte[] responseBytes = new byte[headerBytes.Length + httpBody.GetSize()];
+				byte[] responseBytes = new byte[headerBytes.Length + bodybytes.Length];
 				Buffer.BlockCopy (headerBytes, 0, responseBytes, 0, headerBytes.Length);
-				Buffer.BlockCopy (httpBody.GetBytes(), 0, responseBytes, headerBytes.Length, httpBody.GetSize());
+				Buffer.BlockCopy (bodybytes, 0, responseBytes, headerBytes.Length, bodybytes.Length);
 				return responseBytes;
 			} else {
 				return headerBytes;
@@ -137,10 +141,24 @@ namespace Sabertooth.HTTP {
 		}
 	}
 
-	public class HEADResponse : Response, IStreamable {
-		public HEADResponse(Response.Code C) : base(C, new TextResource("")) {}
-		public override byte[] GetBytes () {
-			return Encoding.UTF8.GetBytes (GetNoContentHeader (true));
+	public class EmptyResponse : Response, IStreamable {
+		public EmptyResponse(Response.Code C) : base(C, null) {
+
+		}
+		public override byte[] GetBytes() {
+			string responseStr = GetNoContentHeader (false);
+			responseStr += Instruction.ContentLength (0).GetText() + Newline;
+			byte[] headerBytes = Encoding.UTF8.GetBytes (responseStr + Newline);
+			return headerBytes;
+		}
+		public override void StreamTo(Stream S) {
+			byte[] response = this.GetBytes ();
+			MemoryStream MS = new MemoryStream (response);
+			MS.CopyTo (S);
+			MS.Flush ();
+		}
+		public override int GetSize() {
+			return this.GetBytes().Length;
 		}
 	}
 }
