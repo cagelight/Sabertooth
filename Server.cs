@@ -69,13 +69,11 @@ namespace Sabertooth {
 				return BR;
 			}
 			string realm;
-			if (Gen.RequiresAuthorization(CR, out realm)) {
-				Tuple<string, string> auth = CR.Authorization;
-				if (auth == null || !Gen.IsAuthorized(CR, auth)) {
-					EmptyResponse AUTH = new EmptyResponse (Response.Code.N401);
-					AUTH.AddInstruction (Instruction.Authenticate(realm));
-					return AUTH;
-				}
+			Tuple<string, string> auth = CR.Authorization;
+			if (!Gen.IsAuthorized(CR, auth, out realm)) {
+				EmptyResponse AUTH = new EmptyResponse (Response.Code.N401);
+				AUTH.AddInstruction (Instruction.Authenticate(realm));
+				return AUTH;
 			}
 			Response Res = new Response (Response.Code.N200, new TextResource("You should not be seeing this."));
 			try {

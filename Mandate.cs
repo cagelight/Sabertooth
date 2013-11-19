@@ -128,11 +128,8 @@ namespace Sabertooth.Mandate {
 		public IStreamableContent Post(ClientRequest CR, ClientBody CB) {
 			return this.GetSite (CR).Post (CR, CB);
 		}
-		public bool RequiresAuthorization(ClientRequest CR, out string realm) {
-			return this.GetSite (CR).RequiresAuthorization (CR, out realm);
-		}
-		public bool IsAuthorized(ClientRequest CR, Tuple<string, string> auth) {
-			return this.GetSite (CR).IsAuthorized (CR, auth);
+		public bool IsAuthorized(ClientRequest CR, Tuple<string, string> auth, out string realm) {
+			return this.GetSite (CR).IsAuthorized (CR, auth, out realm);
 		}
 	}
 	public class Mandate {
@@ -142,12 +139,13 @@ namespace Sabertooth.Mandate {
 		protected List<FileInfo> csFiles = new List<FileInfo>();
 		protected Site[] SITES = new Site[0];
 		protected Site rootSite;
-		protected Dictionary<string, Site> subdomainDict;
+		protected ConcurrentDictionary<string, Site> subdomainDict = new ConcurrentDictionary<string, Site>();
 		protected CompilerResults resultsPrevious;
 		public string[] Subdomains { get{return this.subdomainDict.Keys.ToArray ();} }
 		public bool ClaimsRoot { get{return (rootSite != null);} }
 		public string Filename {get {return this.sbrFile.Name;}}
 		public string Name {get{return this.sbrFile.Name.Substring(0, this.sbrFile.Name.Length - 4);}}
+		protected ManualResetEventSlim buildWait = new ManualResetEventSlim (true);
 		public event MandateBuildSuccessHandler MandateBuildSuccess;
 		public event MandateBuildFailureHandler MandateBuildFailure;
 		public Mandate (string path) {
@@ -241,15 +239,10 @@ namespace Sabertooth.Mandate {
 				compParam.GenerateExecutable = false;
 				compParam.TreatWarningsAsErrors = false;
 				compParam.CompilerOptions = "/optimize";
-				compParam.ReferencedAssemblies.AddRange (new string[] {"System.dll", LocalAssemblyReference("Lexicon.dll"), "WebSharp.dll"});
+				compParam.ReferencedAssemblies.AddRange (new string[] {"System.dll", "Lexicon.dll"});
+				compParam.ReferencedAssemblies.AddRange (buildRefs.ToArray());
 				CSharpCodeProvider provider = new CSharpCodeProvider ();
-				string code = String.Empty;
-				foreach(FileInfo cs in csFiles) {
-					using (StreamReader csr = cs.OpenText()) {
-						code += csr.ReadToEnd();
-					}
-				}
-				resultsPrevious = provider.CompileAssemblyFromSource (compParam, code);
+				resultsPrevious = provider.CompileAssemblyFromFile (compParam, csFiles.Select((fi) => fi.FullName).ToArray());
 				foreach(string o in resultsPrevious.Output) {
 					buildOut.Add(o);
 				}
@@ -285,9 +278,12 @@ namespace Sabertooth.Mandate {
 					Site fsite = new Site(site, root, subdomains.ToArray());
 					siteList.Add(fsite);
 				}
+				buildWait.Reset();
+				foreach(Site S in this.SITES) {S.Upkeep();}
 				this.SITES = siteList.ToArray();
 				this.MODULE = mod;
 				this.RepopulateDictionary();
+				buildWait.Set();
 				this.MandateBuildSuccess(this, buildOut);
 				return true;
 			} catch (Exception e) {
@@ -297,7 +293,7 @@ namespace Sabertooth.Mandate {
 		}
 		protected void RepopulateDictionary() {
 			rootSite = null;
-			subdomainDict = new Dictionary<string, Site> ();
+			subdomainDict = new ConcurrentDictionary<string, Site> ();
 			foreach(Site S in this.SITES) {
 				if (S.root) {
 					if (rootSite != null) {Console.WriteLine ("WARNING: MULTIPLE CLAIMS OF THE ROOT DOMAIN ON THE SAME MANDATE!");}
@@ -321,6 +317,7 @@ namespace Sabertooth.Mandate {
 		internal Site GetSite(ClientRequest CR, string subdomain) {
 			try {
 				Site g;
+				buildWait.Wait ();
 				if (subdomain != null && subdomainDict.TryGetValue(subdomain, out g)) {
 					return g;
 				} else {
@@ -339,7 +336,7 @@ namespace Sabertooth.Mandate {
 
 		}
 		protected virtual void OnBuildFailure(Mandate source, List<string> buildLog, Exception e) {
-
+			Console.WriteLine (String.Format("A Build has failed, below is the build log and the exception:\n\nBuild Log: {0}\n\nException: {1}", String.Join("\n", buildLog), e));
 		}
 		public static string LocalAssemblyReference(string dllName) {
 			return Path.Combine (Environment.CurrentDirectory, dllName);
@@ -354,9 +351,9 @@ namespace Sabertooth.Mandate {
 		public readonly string[] subdomains;
 		protected Type modref;
 		protected object instance;
+		protected MethodInfo UPKEEP { get{return modref.GetMethod ("Upkeep");} }
 		protected MethodInfo GET { get{return modref.GetMethod ("Get");} }
 		protected MethodInfo POST { get{return modref.GetMethod ("Post");} }
-		protected MethodInfo REQAUTH { get{return modref.GetMethod ("RequiresAuthorization");} }
 		protected MethodInfo ISAUTH { get{return modref.GetMethod ("IsAuthorized");} }
 		public Site(Type modref, bool root, string[] subdomains) {
 			this.modref = modref;
@@ -364,20 +361,20 @@ namespace Sabertooth.Mandate {
 			this.subdomains = subdomains;
 			instance = modref.GetConstructor (new Type[0]).Invoke(new object[0]);
 		}
+		public void Upkeep () {
+			UPKEEP.Invoke (instance, null);
+		}
 		public IStreamableContent Get(ClientRequest CR) {
 			return GET.Invoke (instance, new object[] {CR}) as IStreamableContent;
 		}
 		public IStreamableContent Post(ClientRequest CR, ClientBody CB) {
 			return POST.Invoke (instance, new object[] {CR, CB}) as IStreamableContent;
 		}
-		public bool RequiresAuthorization(ClientRequest CR, out string realm) {
-			object[] param = new object[] { CR, null };
-			bool r = (bool)REQAUTH.Invoke (instance, param);
-			realm = param [1] as string;
+		public bool IsAuthorized(ClientRequest CR, Tuple<string, string> auth, out string realm) {
+			object[] param = new object[] { CR, auth, null };
+			bool r = (bool)ISAUTH.Invoke (instance, param);
+			realm = param [2] as string;
 			return r;
-		}
-		public bool IsAuthorized(ClientRequest CR, Tuple<string, string> auth) {
-			return (bool)ISAUTH.Invoke (instance, new object[] {CR, auth});
 		}
 	}
 
