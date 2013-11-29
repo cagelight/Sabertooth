@@ -7,9 +7,12 @@ using Sabertooth.Lexicon;
 using WebSharp;
 
 namespace Sabertooth.HTTP {
-	public abstract class HTTPObject : IStreamable{
+	public static class HTTP {
 		public const string Newline = "\r\n";
-		protected List<Instruction> httpInstructions = new List<Instruction> ();
+	}
+	public abstract class HTTPObject : IStreamable{
+
+
 		public bool IsLoaded{ get{return true;}}
 		public HTTPObject() {
 
@@ -26,13 +29,6 @@ namespace Sabertooth.HTTP {
 		public Instruction(string key, string value) {
 			Key = key;Value = value;
 		}
-		public string GetText() {
-			string optionsText = String.Empty;
-			foreach(string IT in Options) {
-				optionsText += " ;" + IT;
-			}
-			return String.Format ("{0}: {1}{2}", Key, Value, optionsText);
-		}
 		public enum Connection {KeepAlive, Close}
 		internal static Instruction ConnectionClose = new Instruction ("Connection", "close");
 		internal static Instruction ConnectionKeepAlive = new Instruction ("Connection", "keep-alive");
@@ -45,8 +41,16 @@ namespace Sabertooth.HTTP {
 		public static Instruction Authenticate(string realm) {
 			return new Instruction ("WWW-Authenticate", String.Format("Basic realm=\"{0}\"", realm));
 		}
+		public override string ToString () {
+			string optionsText = String.Empty;
+			foreach(string IT in Options) {
+				optionsText += " ;" + IT;
+			}
+			return String.Format ("{0}: {1}{2}{3}", Key, Value, optionsText, HTTP.Newline);
+		}
 	}
-	public class Response : HTTPObject, IStreamable {
+	public class Response {
+		protected List<Instruction> httpInstructions = new List<Instruction> ();
 		public struct Code {
 			public readonly int Number; public readonly string Description;
 			public Code(int num, string desc) {
@@ -64,15 +68,16 @@ namespace Sabertooth.HTTP {
 			public static readonly Code N500 = new Code(500, "Internal Server Error");
 			public static readonly Code N501 = new Code(501, "Not Implemented");
 		}
-		Code httpCode;
-		IStreamableContent httpBody = new GeneratedResource (new byte[]{}, MIME.Plaintext);
-
+		protected Code httpCode;
+		protected IStreamableContent httpBody = new GeneratedResource (new byte[]{}, MIME.Plaintext);
 		public Instruction.Connection connectionStatus = Instruction.Connection.KeepAlive;
 		public Response(Code C, IStreamableContent body) {
 			httpCode = C;
 			this.httpBody = body;
+			this.AddInstruction (new Instruction("Server", "Sabertooth"));
 		}
-
+		public Response(Code C) : this(C, null) {
+		}
 		public void AddInstruction(Instruction I) {
 			this.httpInstructions.Add (I);
 		}
@@ -84,23 +89,38 @@ namespace Sabertooth.HTTP {
 			this.httpBody = ICS;
 		}
 
-		public string GetNoContentHeader(bool tailingNewline = false) {
-			string returnString = httpCode.ToString() + Newline;
-			returnString += (connectionStatus == Instruction.Connection.KeepAlive ? Instruction.ConnectionKeepAlive.GetText() : Instruction.ConnectionClose.GetText()) + Newline;
+		protected string GetNoContentHeader() {
+			string returnString = httpCode.ToString() + HTTP.Newline;
+			returnString += (connectionStatus == Instruction.Connection.KeepAlive ? Instruction.ConnectionKeepAlive : Instruction.ConnectionClose);
 			foreach(Instruction I in httpInstructions) {
-				returnString += I.GetText () + Newline;
+				returnString += I;
 			}
-			return tailingNewline ? returnString + Newline : returnString;
+			return returnString;
 		}
 
-		public override byte[] GetBytes() {
-			string responseStr = GetNoContentHeader (false);
+		protected string GetFullHeader() {
+			string nch = this.GetNoContentHeader ();
+			if (httpBody != null) {
+				if (httpBody.IsLoaded) {
+					byte[] response = httpBody.GetBytes ();
+					return nch + Instruction.ContentType(httpBody.Format) + Instruction.ContentLength(response.Length) + HTTP.Newline;
+				} else {
+					return nch + Instruction.ContentType (httpBody.Format) + Instruction.ContentLength (httpBody.GetSize ()) + HTTP.Newline;
+				}
+			} else {
+				return nch + Instruction.ContentLength (0) + HTTP.Newline;
+			}
+
+		}
+
+		public byte[] GetBytes() {
+			string responseStr = GetNoContentHeader ();
 			byte[] bodybytes = httpBody.GetBytes ();
 			if(bodybytes.Length > 0) {
-				responseStr += Instruction.ContentType (httpBody.Format).GetText () + Newline;
-				responseStr += Instruction.ContentLength (bodybytes.Length).GetText() + Newline;
+				responseStr += Instruction.ContentType (httpBody.Format);
 			}
-			byte[] headerBytes = Encoding.UTF8.GetBytes (responseStr + Newline);
+			responseStr += Instruction.ContentLength (bodybytes.Length);
+			byte[] headerBytes = Encoding.UTF8.GetBytes (responseStr + HTTP.Newline);
 			if(bodybytes.Length > 0) {
 				byte[] responseBytes = new byte[headerBytes.Length + bodybytes.Length];
 				Buffer.BlockCopy (headerBytes, 0, responseBytes, 0, headerBytes.Length);
@@ -110,46 +130,59 @@ namespace Sabertooth.HTTP {
 				return headerBytes;
 			}
 		}
-		public override int GetSize() {
+		public int GetSize() {
 			return -1;
 		}
-		public override void StreamTo(Stream S) {
+		public void StreamHeaderTo(Stream S) {
+			string fh = this.GetFullHeader();
+			MemoryStream MS = new MemoryStream (Encoding.UTF8.GetBytes(fh));
+			MS.CopyTo (S);
+			MS.Flush ();
+			MS.Close ();
+		}
+		public void StreamCompleteTo(Stream S) {
 			if (httpBody != null) {
 				if (httpBody.IsLoaded) {
 					byte[] response = this.GetBytes ();
 					MemoryStream MS = new MemoryStream (response);
 					MS.CopyTo (S);
 					MS.Flush ();
-					//MS.Close ();
+					MS.Close ();
 				} else {
-					string nchead = this.GetNoContentHeader (false);
-					nchead += Instruction.ContentType (httpBody.Format).GetText () + Newline;
-					int bodylength = httpBody.GetSize ();
-					if (bodylength > -1) {
-						nchead += Instruction.ContentLength (bodylength).GetText () + Newline;
-					}
-					byte[] headerbytes = Encoding.UTF8.GetBytes (nchead + Newline);
+					string nchead = this.GetNoContentHeader ();
+					nchead += Instruction.ContentType (httpBody.Format);
+					nchead += Instruction.ContentLength (httpBody.GetSize ());
+					byte[] headerbytes = Encoding.UTF8.GetBytes (nchead + HTTP.Newline);
 					S.Write (headerbytes, 0, headerbytes.Length);
 					httpBody.StreamTo (S);
 				}
 			} else {
-				MemoryStream MS = new MemoryStream (Encoding.UTF8.GetBytes(this.GetNoContentHeader(true)));
+				string ncr = this.GetNoContentHeader () + Instruction.ContentLength(0) + HTTP.Newline;
+				MemoryStream MS = new MemoryStream (Encoding.UTF8.GetBytes(ncr));
 				MS.CopyTo (S);
 				MS.Flush ();
-				//MS.Close ();
+				MS.Close ();
 			}
 		}
 	}
 
-	public class EmptyResponse : Response, IStreamable {
+	/*public class EmptyResponse : Response, IStreamable {
+		string overrideresponse = null;
 		public EmptyResponse(Response.Code C) : base(C, null) {
 
 		}
+		public EmptyResponse(Response.Code C, string overrideresponse) : base(C, null) {
+			this.overrideresponse = overrideresponse;
+		}
 		public override byte[] GetBytes() {
-			string responseStr = GetNoContentHeader (false);
-			responseStr += Instruction.ContentLength (0).GetText() + Newline;
-			byte[] headerBytes = Encoding.UTF8.GetBytes (responseStr + Newline);
-			return headerBytes;
+			if (overrideresponse == null) {
+				string responseStr = GetNoContentHeader (false);
+				responseStr += Instruction.ContentLength (0) + Newline;
+				byte[] headerBytes = Encoding.UTF8.GetBytes (responseStr + Newline);
+				return headerBytes;
+			} else {
+				return Encoding.UTF8.GetBytes (overrideresponse);
+			}
 		}
 		public override void StreamTo(Stream S) {
 			byte[] response = this.GetBytes ();
@@ -160,6 +193,6 @@ namespace Sabertooth.HTTP {
 		public override int GetSize() {
 			return this.GetBytes().Length;
 		}
-	}
+	}*/
 }
 

@@ -105,13 +105,13 @@ namespace Sabertooth.Mandate {
 		}
 		protected Site GetSite(ClientRequest CR) {
 			try {
-				string[] domsplit = CR.Host.Split (new char[] {'.'}).Reverse().ToArray();
+				//string[] domsplit = CR.Host.Split (new char[] {'.'}).Reverse().ToArray();
 				Mandate M;
-				if (domsplit.Length > 2 && subdomainDict.TryGetValue(domsplit[2], out M)) {
-					return M.GetSite (CR, domsplit [2]);
+				if (subdomainDict.TryGetValue(CR.Subdomain, out M)) {
+					return M.GetSite (CR);
 				} else {
 					if (rootMandate != null) {
-						return rootMandate.GetSite (CR, null);
+						return rootMandate.GetSite (CR);
 					} else {
 						throw new Exception ("A request to the root domain was made, but none of your mandates claim root ownership.");
 					}
@@ -239,7 +239,7 @@ namespace Sabertooth.Mandate {
 				compParam.GenerateExecutable = false;
 				compParam.TreatWarningsAsErrors = false;
 				compParam.CompilerOptions = "/optimize";
-				compParam.ReferencedAssemblies.AddRange (new string[] {"System.dll", "Lexicon.dll"});
+				compParam.ReferencedAssemblies.AddRange (new string[] {"System.dll", "Lexicon.dll", "WebSharp.dll"});
 				compParam.ReferencedAssemblies.AddRange (buildRefs.ToArray());
 				CSharpCodeProvider provider = new CSharpCodeProvider ();
 				resultsPrevious = provider.CompileAssemblyFromFile (compParam, csFiles.Select((fi) => fi.FullName).ToArray());
@@ -314,11 +314,11 @@ namespace Sabertooth.Mandate {
 			}
 			return log;
 		}
-		internal Site GetSite(ClientRequest CR, string subdomain) {
+		internal Site GetSite(ClientRequest CR) {
 			try {
 				Site g;
 				buildWait.Wait ();
-				if (subdomain != null && subdomainDict.TryGetValue(subdomain, out g)) {
+				if (subdomainDict.TryGetValue(CR.Subdomain, out g)) {
 					return g;
 				} else {
 					if (rootSite != null) {
@@ -333,10 +333,13 @@ namespace Sabertooth.Mandate {
 			}
 		}
 		protected virtual void OnBuildSuccess(Mandate source, List<string> buildLog) {
-
+			if (File.Exists(LocalSiteReference(this.Name+".buildfailure.log"))) {
+				File.Delete (LocalSiteReference(this.Name+".buildfailure.log"));
+			}
 		}
 		protected virtual void OnBuildFailure(Mandate source, List<string> buildLog, Exception e) {
 			Console.WriteLine (String.Format("A Build has failed, below is the build log and the exception:\n\nBuild Log: {0}\n\nException: {1}", String.Join("\n", buildLog), e));
+			File.WriteAllText (LocalSiteReference(this.Name+".buildfailure.log"), String.Format("A Build has failed, below is the build log and the exception:\n\nBuild Log: {0}\n\nException: {1}", String.Join("\n", buildLog), e));
 		}
 		public static string LocalAssemblyReference(string dllName) {
 			return Path.Combine (Environment.CurrentDirectory, dllName);

@@ -31,8 +31,12 @@ namespace Sabertooth {
 			}
 		}
 
-		public void SendHTTP(HTTPObject H) {
-			H.StreamTo (Communications);
+		public void SendHTTP(Response R, bool complete = true) {
+			if (complete) {
+				R.StreamCompleteTo (Communications);
+			} else {
+				R.StreamHeaderTo (Communications);
+			}
 		}
 	}
 }

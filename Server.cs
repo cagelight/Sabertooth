@@ -18,7 +18,7 @@ namespace Sabertooth {
 		private MandateManager Gen;
 
 		public Server() {
-			ClientListener = new TcpListener (IPAddress.Any, 8080);
+			ClientListener = new TcpListener (IPAddress.Any, 80);
 			Gen = new MandateManager();
 		}
 		public void Start() {
@@ -52,7 +52,14 @@ namespace Sabertooth {
 					break;
 				}
 				Response R = GenerateResponse (clientInfo);
-				Concierge.SendHTTP (R);
+				switch (clientInfo.Type) {
+				case "HEAD":
+					Concierge.SendHTTP (R, false);
+					break;
+				default:
+					Concierge.SendHTTP (R);
+					break;
+				}
 			}
 			Concierge.Close ();
 			Client.Close ();
@@ -60,7 +67,7 @@ namespace Sabertooth {
 
 		private Response GenerateResponse(ClientRequest CR) {
 			if (CR.Host == null) {
-				Response BR = new Response (Response.Code.N400, new TextResource("Sabertooth requires that clients use HTTP 1.1 connections, and thus have Host fields in their headers."));
+				Response BR = new Response (Response.Code.N400, new TextResource("Sabertooth requires that clients have Host fields in their headers."));
 				BR.connectionStatus = Instruction.Connection.Close;
 				return BR;
 			}
@@ -71,11 +78,11 @@ namespace Sabertooth {
 			string realm;
 			Tuple<string, string> auth = CR.Authorization;
 			if (!Gen.IsAuthorized(CR, auth, out realm)) {
-				EmptyResponse AUTH = new EmptyResponse (Response.Code.N401);
+				Response AUTH = new Response (Response.Code.N401);
 				AUTH.AddInstruction (Instruction.Authenticate(realm));
 				return AUTH;
 			}
-			Response Res = new Response (Response.Code.N200, new TextResource("You should not be seeing this."));
+			Response Res = new Response (Response.Code.N200);
 			try {
 				ClientBody CB = CR.ReadBody();
 				IStreamableContent GenRes;
@@ -89,12 +96,10 @@ namespace Sabertooth {
 				Res.SetBody (GenRes);
 			} catch (Exception e) {
 				Console.WriteLine (e);
-				Response ISE = new Response (Response.Code.N500, new TextResource ("If you are reading this text, the Sabertooth mandate responsible for this request has encountered an error. If you are the server administrator, an error log should have appeared in the main Sabertooth console window."));
+				Response ISE = new Response (Response.Code.N500, new TextResource ("If you are reading this text, the Sabertooth mandate responsible for this request has encountered an error: \n" + e));
 				ISE.connectionStatus = Instruction.Connection.Close;
 				return ISE;
 			}
-			if (CR.Type == "HEAD")
-				return (EmptyResponse)Res;
 			return Res;
 		}
 
