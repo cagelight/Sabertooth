@@ -121,15 +121,17 @@ namespace Sabertooth.Mandate {
 				return null;
 			}
 		}
-		public IStreamableContent Get(ClientRequest CR) {
+		public ClientReturn Get(ClientRequest CR) {
 			return this.GetSite (CR).Get (CR);
 		}
-
-		public IStreamableContent Post(ClientRequest CR, ClientBody CB) {
+		public ClientReturn Post(ClientRequest CR, ClientBody CB) {
 			return this.GetSite (CR).Post (CR, CB);
 		}
 		public bool IsAuthorized(ClientRequest CR, Tuple<string, string> auth, out string realm) {
 			return this.GetSite (CR).IsAuthorized (CR, auth, out realm);
+		}
+		public CacheData GetCacheData(ClientRequest CR) {
+			return this.GetSite (CR).GetCacheData (CR);
 		}
 	}
 	public class Mandate {
@@ -153,7 +155,7 @@ namespace Sabertooth.Mandate {
 			this.EvalSbr ();
 			this.MandateBuildSuccess += OnBuildSuccess;
 			this.MandateBuildFailure += OnBuildFailure;
-			this.Build ();
+			//this.Build ();
 		}
 		protected enum SbrLineState {NUL, REF, SRC}
 		protected void EvalSbr() {
@@ -232,6 +234,7 @@ namespace Sabertooth.Mandate {
 			}
 		}
 		public bool Build() {
+			buildWait.Reset();
 			List<string> buildOut = new List<string> ();
 			try {
 				CompilerParameters compParam = new CompilerParameters ();
@@ -278,7 +281,6 @@ namespace Sabertooth.Mandate {
 					Site fsite = new Site(site, root, subdomains.ToArray());
 					siteList.Add(fsite);
 				}
-				buildWait.Reset();
 				foreach(Site S in this.SITES) {S.Upkeep();}
 				this.SITES = siteList.ToArray();
 				this.MODULE = mod;
@@ -288,6 +290,7 @@ namespace Sabertooth.Mandate {
 				return true;
 			} catch (Exception e) {
 				this.MandateBuildFailure (this, buildOut, e);
+				buildWait.Set();
 				return false;
 			}
 		}
@@ -358,26 +361,35 @@ namespace Sabertooth.Mandate {
 		protected MethodInfo GET { get{return modref.GetMethod ("Get");} }
 		protected MethodInfo POST { get{return modref.GetMethod ("Post");} }
 		protected MethodInfo ISAUTH { get{return modref.GetMethod ("IsAuthorized");} }
+		protected MethodInfo CACHE { get{return modref.GetMethod ("GetCacheData");} }
+		protected bool booted = false;
+		public bool IsBooted {get {return booted;}}
 		public Site(Type modref, bool root, string[] subdomains) {
+			Console.WriteLine ("Booting site {0}...", modref.Name);
 			this.modref = modref;
 			this.root = root;
 			this.subdomains = subdomains;
 			instance = modref.GetConstructor (new Type[0]).Invoke(new object[0]);
+			this.booted = true;
+			Console.WriteLine ("...Complete");
 		}
 		public void Upkeep () {
 			UPKEEP.Invoke (instance, null);
 		}
-		public IStreamableContent Get(ClientRequest CR) {
-			return GET.Invoke (instance, new object[] {CR}) as IStreamableContent;
+		public ClientReturn Get(ClientRequest CR) {
+			return GET.Invoke (instance, new object[] {CR}) as ClientReturn;
 		}
-		public IStreamableContent Post(ClientRequest CR, ClientBody CB) {
-			return POST.Invoke (instance, new object[] {CR, CB}) as IStreamableContent;
+		public ClientReturn Post(ClientRequest CR, ClientBody CB) {
+			return POST.Invoke (instance, new object[] {CR, CB}) as ClientReturn;
 		}
 		public bool IsAuthorized(ClientRequest CR, Tuple<string, string> auth, out string realm) {
 			object[] param = new object[] { CR, auth, null };
 			bool r = (bool)ISAUTH.Invoke (instance, param);
 			realm = param [2] as string;
 			return r;
+		}
+		public CacheData GetCacheData(ClientRequest CR) {
+			return CACHE.Invoke (instance, new object[] {CR}) as CacheData;
 		}
 	}
 

@@ -41,6 +41,15 @@ namespace Sabertooth.HTTP {
 		public static Instruction Authenticate(string realm) {
 			return new Instruction ("WWW-Authenticate", String.Format("Basic realm=\"{0}\"", realm));
 		}
+		public static Instruction SetCookie(SetCookie C) {
+			return new Instruction ("Set-Cookie", C.ToString());
+		}
+		public static Instruction LastModified(DateTime D) {
+			return new Instruction ("Last-Modified", D.ToString("R"));
+		}
+		public static Instruction ETag(string E) {
+			return new Instruction ("ETag", String.Format("\"{0}\"", E));
+		}
 		public override string ToString () {
 			string optionsText = String.Empty;
 			foreach(string IT in Options) {
@@ -61,6 +70,8 @@ namespace Sabertooth.HTTP {
 			}
 			public static readonly Code N100 = new Code(100, "Continue");
 			public static readonly Code N200 = new Code(200, "OK");
+			public static readonly Code N304 = new Code(304, "Not Modified");
+			public static readonly Code N307 = new Code(307, "Temporary Redirect");
 			public static readonly Code N400 = new Code(400, "Bad Request");
 			public static readonly Code N401 = new Code(401, "Authorization Required");
 			public static readonly Code N403 = new Code(403, "Forbidden");
@@ -70,11 +81,13 @@ namespace Sabertooth.HTTP {
 		}
 		protected Code httpCode;
 		protected IStreamableContent httpBody = new GeneratedResource (new byte[]{}, MIME.Plaintext);
+		public int MaxAge = 0;
 		public Instruction.Connection connectionStatus = Instruction.Connection.KeepAlive;
 		public Response(Code C, IStreamableContent body) {
 			httpCode = C;
 			this.httpBody = body;
 			this.AddInstruction (new Instruction("Server", "Sabertooth"));
+			this.AddInstruction (new Instruction("Date", DateTime.Now.ToString("R")));
 		}
 		public Response(Code C) : this(C, null) {
 		}
@@ -95,6 +108,7 @@ namespace Sabertooth.HTTP {
 			foreach(Instruction I in httpInstructions) {
 				returnString += I;
 			}
+			returnString += new Instruction ("Cache-Control", "max-age=" + MaxAge.ToString ());
 			return returnString;
 		}
 
